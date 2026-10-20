@@ -1,0 +1,4 @@
+# Shows the last command line SCCM executed and flags any non-ASCII character (en dash, non-breaking space)
+$entry = Select-String -Path 'C:\Windows\CCM\Logs\AppEnforce.log' -Pattern 'Executing Command line' | Select-Object -Last 1
+$entry.Line -replace '^<!\[LOG\[' -replace '\]LOG\]!>.*$'
+$entry.Line.ToCharArray() | Where-Object { [int]$_ -gt 127 } | ForEach-Object { 'Non-ASCII character: U+{0:X4}' -f [int]$_ }
