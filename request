@@ -1,0 +1,16 @@
+$contentPath = 'C:\Windows\ccmcache\4w'
+Get-ChildItem -Path $contentPath -Force | Select-Object Name, Length, LastWriteTime
+
+# Syntax check of the file SCCM is actually running
+$script = Join-Path $contentPath 'Install-UptimeReboot.ps1'
+$tokens = $null; $parseErrors = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrors)
+$parseErrors | ForEach-Object { 'Line {0}: {1}' -f $_.Extent.StartLineNumber, $_.Message }
+
+# Is it the current version? Both lines must be found
+Select-String -Path $script -Pattern 'ExitRebootRequired  = 17010', 'UptimeReboot\.log' | Select-Object LineNumber, Line
+
+# Same command line SCCM used: shows the real error on screen
+Set-Location $contentPath
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\Install-UptimeReboot.ps1 -ThresholdMinutes 60
+"Exit code: $LASTEXITCODE"
