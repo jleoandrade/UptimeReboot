@@ -2,22 +2,21 @@
 
 <#
 .SYNOPSIS
-    SCCM detection method for uptime enforcement.
+    Configuration Manager detection method for uptime enforcement.
 
 .DESCRIPTION
-    LAB:
-    Considers the deployment detected while uptime is below 60 minutes.
+    If device uptime is below 60 minutes:
+        Writes "Installed" to STDOUT.
+        Configuration Manager considers the Deployment Type detected.
 
-    Once uptime reaches 60 minutes, exits successfully without STDOUT,
-    causing SCCM to consider the Deployment Type not detected.
+    If device uptime is 60 minutes or greater:
+        Produces no STDOUT.
+        Configuration Manager considers the Deployment Type not detected.
 
-    No restart is performed by this script.
-
-.NOTES
-    Purpose: SCCM Lab-Uptime
-    Context: SYSTEM
+    This script does not modify the device.
 #>
 
+Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 # ============================================================
@@ -28,7 +27,7 @@ $MaximumUptimeMinutes = 60
 
 
 # ============================================================
-# MAIN
+# DETECTION
 # ============================================================
 
 try {
@@ -37,28 +36,40 @@ try {
         -ClassName Win32_OperatingSystem `
         -ErrorAction Stop
 
+
+    if ($null -eq $OperatingSystem) {
+
+        throw 'Win32_OperatingSystem returned null.'
+    }
+
+
     $LastBootTime = $OperatingSystem.LastBootUpTime
 
+
     if ($null -eq $LastBootTime) {
+
         throw 'LastBootUpTime returned null.'
     }
+
 
     $CurrentTime = Get-Date
 
     $Uptime = $CurrentTime - $LastBootTime
+
+
+    if ($Uptime.TotalMinutes -lt 0) {
+
+        throw 'Calculated uptime is negative.'
+    }
+
 
     $UptimeMinutes = [math]::Floor(
         $Uptime.TotalMinutes
     )
 
 
-    # ========================================================
-    # COMPLIANT
-    #
-    # Uptime < 60 minutes
-    #
-    # STDOUT causes SCCM to detect the Deployment Type.
-    # ========================================================
+    # Uptime is below the maximum threshold.
+    # STDOUT + exit code 0 means detected.
 
     if ($UptimeMinutes -lt $MaximumUptimeMinutes) {
 
@@ -68,24 +79,17 @@ try {
     }
 
 
-    # ========================================================
-    # THRESHOLD REACHED
+    # Uptime reached or exceeded the threshold..
     #
-    # Uptime >= 60 minutes
-    #
-    # Exit 0 WITHOUT STDOUT.
-    # SCCM detection should therefore indicate not detected.
-    # ========================================================
+    # Exit code 0 with no STDOUT means not detected.
+    # Configuration Manager can then enforce the Required deployment.
 
     exit 0
-
 }
 catch {
 
-    # Fail safely.
-    #
-    # We don't want an inability to determine uptime
-    # to become authorization to restart the endpoint.
+    # Detection failures must never be interpreted
+    # as authorization to restart the device.
 
     exit 1
 }
