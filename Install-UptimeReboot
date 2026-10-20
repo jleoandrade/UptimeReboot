@@ -2,55 +2,57 @@
 
 <#
 .SYNOPSIS
-    Requests an SCCM-managed restart when uptime reaches 60 minutes.
+    Requests a Configuration Manager managed restart when the device
+    reaches the configured uptime threshold.
 
 .DESCRIPTION
-    Performs a second independent uptime validation.
+    Lab configuration:
+        Uptime threshold: 60 minutes.
 
-    If uptime >= 60 minutes:
-        Returns restart-required condition.
+    Exit codes:
+        0  = Success, restart not required.
+        10 = Success, soft restart required.
+        1  = Execution failure.
 
-    If uptime < 60 minutes:
-        Exits successfully without requesting restart.
-
-    Restart timing and end-user experience remain under
-    Configuration Manager control.
+    This script does NOT directly restart the device.
+    Configuration Manager is responsible for restart notifications,
+    countdown, and restart enforcement.
 
 .NOTES
-    Purpose: SCCM Lab-Uptime
-    Context: SYSTEM
+    Expected execution context: LocalSystem
+    Minimum PowerShell version: Windows PowerShell 5.1
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [ValidateRange(1, 525600)]
+    [int]$MaximumUptimeMinutes = 60
+)
 
+Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-$MaximumUptimeMinutes = 60
-
 $LogDirectory = Join-Path `
-    $env:ProgramData `
-    'Corporate\UptimeReboot'
+    -Path $env:ProgramData `
+    -ChildPath 'Corporate\UptimeReboot'
 
 $LogFile = Join-Path `
-    $LogDirectory `
-    'UptimeReboot.log'
+    -Path $LogDirectory `
+    -ChildPath 'UptimeReboot.log'
 
 
 # ============================================================
 # LOGGING
 # ============================================================
 
-function Write-Log {
+function Write-UptimeLog {
 
     [CmdletBinding()]
     param(
-
         [Parameter(Mandatory)]
         [string]$Message,
 
@@ -89,8 +91,7 @@ function Write-Log {
     }
     catch {
 
-        # Logging failure must not cause a restart.
-        Write-Error "Unable to write log: $($_.Exception.Message)"
+        # Logging failures must not change the operational result.
     }
 }
 
@@ -101,73 +102,115 @@ function Write-Log {
 
 try {
 
-    Write-Log 'Starting uptime evaluation.'
+    Write-UptimeLog `
+        -Message 'Starting uptime evaluation.'
+
+
+    # Get operating system information.
 
     $OperatingSystem = Get-CimInstance `
         -ClassName Win32_OperatingSystem `
         -ErrorAction Stop
 
+
+    if ($null -eq $OperatingSystem) {
+
+        throw 'Win32_OperatingSystem returned null.'
+    }
+
+
     $LastBootTime = $OperatingSystem.LastBootUpTime
+
 
     if ($null -eq $LastBootTime) {
 
         throw 'LastBootUpTime returned null.'
     }
 
+
+    # Calculate device uptime.
+
     $CurrentTime = Get-Date
 
     $Uptime = $CurrentTime - $LastBootTime
+
+
+    if ($Uptime.TotalMinutes -lt 0) {
+
+        throw 'Calculated uptime is negative. Check the system date and time.'
+    }
+
 
     $UptimeMinutes = [math]::Floor(
         $Uptime.TotalMinutes
     )
 
-
-    Write-Log (
-        'Computer={0}; LastBoot={1}; CurrentTime={2}; UptimeMinutes={3}; ThresholdMinutes={4}' -f `
-        $env:COMPUTERNAME,
-        $LastBootTime,
-        $CurrentTime,
-        $UptimeMinutes,
-        $MaximumUptimeMinutes
+    $UptimeHours = [math]::Round(
+        $Uptime.TotalHours,
+        2
     )
 
 
-    # ========================================================
-    # SAFETY CHECK
-    # ========================================================
+    # Record the evaluation results.
+
+    Write-UptimeLog `
+        -Message (
+            'Computer={0}; LastBoot={1}; CurrentTime={2}; UptimeMinutes={3}; UptimeHours={4}; ThresholdMinutes={5}' -f `
+            $env:COMPUTERNAME,
+            $LastBootTime,
+            $CurrentTime,
+            $UptimeMinutes,
+            $UptimeHours,
+            $MaximumUptimeMinutes
+        )
+
+
+    # Device has not reached the uptime threshold.
 
     if ($UptimeMinutes -lt $MaximumUptimeMinutes) {
 
-        Write-Log (
-            "Threshold not reached. Current uptime: $UptimeMinutes minutes."
-        )
+        Write-UptimeLog `
+            -Message (
+                'Threshold not reached. Uptime={0} minutes; Threshold={1} minutes. No restart requested.' -f `
+                $UptimeMinutes,
+                $MaximumUptimeMinutes
+            )
 
         exit 0
     }
 
 
-    # ========================================================
-    # RESTART REQUIRED
-    # ========================================================
+    # Device has reached or exceeded the uptime threshold.
 
-    Write-Log (
-        "Threshold reached. Current uptime: $UptimeMinutes minutes. " +
-        'Returning restart-required status to Configuration Manager.'
-    ) 'WARNING'
+    Write-UptimeLog `
+        -Message (
+            'Threshold reached. Uptime={0} minutes; Threshold={1} minutes. Requesting Configuration Manager managed restart.' -f `
+            $UptimeMinutes,
+            $MaximumUptimeMinutes
+        ) `
+        -Level 'WARNING'
 
 
-    # Let SCCM manage notification/countdown/restart.
-    exit 3010
+    # Custom Configuration Manager return code.
+    #
+    # Configure Return Code 10 in the Deployment Type as:
+    #
+    #     Code Type: Soft Reboot
+    #
+    # Configuration Manager will control the restart experience.
 
+    exit 10
 }
 catch {
 
     $ErrorMessage = $_.Exception.Message
 
-    Write-Log `
-        "Uptime evaluation failed: $ErrorMessage" `
-        'ERROR'
+    Write-UptimeLog `
+        -Message (
+            'Uptime evaluation failed. Error={0}' -f `
+            $ErrorMessage
+        ) `
+        -Level 'ERROR'
 
     exit 1
 }
