@@ -1,0 +1,173 @@
+#requires -version 5.1
+
+<#
+.SYNOPSIS
+    Requests an SCCM-managed restart when uptime reaches 60 minutes.
+
+.DESCRIPTION
+    Performs a second independent uptime validation.
+
+    If uptime >= 60 minutes:
+        Returns restart-required condition.
+
+    If uptime < 60 minutes:
+        Exits successfully without requesting restart.
+
+    Restart timing and end-user experience remain under
+    Configuration Manager control.
+
+.NOTES
+    Purpose: SCCM Lab-Uptime
+    Context: SYSTEM
+#>
+
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+$MaximumUptimeMinutes = 60
+
+$LogDirectory = Join-Path `
+    $env:ProgramData `
+    'Corporate\UptimeReboot'
+
+$LogFile = Join-Path `
+    $LogDirectory `
+    'UptimeReboot.log'
+
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+function Write-Log {
+
+    [CmdletBinding()]
+    param(
+
+        [Parameter(Mandatory)]
+        [string]$Message,
+
+        [ValidateSet(
+            'INFO',
+            'WARNING',
+            'ERROR'
+        )]
+        [string]$Level = 'INFO'
+    )
+
+    try {
+
+        if (-not (Test-Path -LiteralPath $LogDirectory)) {
+
+            New-Item `
+                -Path $LogDirectory `
+                -ItemType Directory `
+                -Force `
+                -ErrorAction Stop |
+                Out-Null
+        }
+
+        $Timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+        $LogEntry = '{0} [{1}] {2}' -f `
+            $Timestamp,
+            $Level,
+            $Message
+
+        Add-Content `
+            -LiteralPath $LogFile `
+            -Value $LogEntry `
+            -Encoding UTF8 `
+            -ErrorAction Stop
+    }
+    catch {
+
+        # Logging failure must not cause a restart.
+        Write-Error "Unable to write log: $($_.Exception.Message)"
+    }
+}
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+try {
+
+    Write-Log 'Starting uptime evaluation.'
+
+    $OperatingSystem = Get-CimInstance `
+        -ClassName Win32_OperatingSystem `
+        -ErrorAction Stop
+
+    $LastBootTime = $OperatingSystem.LastBootUpTime
+
+    if ($null -eq $LastBootTime) {
+
+        throw 'LastBootUpTime returned null.'
+    }
+
+    $CurrentTime = Get-Date
+
+    $Uptime = $CurrentTime - $LastBootTime
+
+    $UptimeMinutes = [math]::Floor(
+        $Uptime.TotalMinutes
+    )
+
+
+    Write-Log (
+        'Computer={0}; LastBoot={1}; CurrentTime={2}; UptimeMinutes={3}; ThresholdMinutes={4}' -f `
+        $env:COMPUTERNAME,
+        $LastBootTime,
+        $CurrentTime,
+        $UptimeMinutes,
+        $MaximumUptimeMinutes
+    )
+
+
+    # ========================================================
+    # SAFETY CHECK
+    # ========================================================
+
+    if ($UptimeMinutes -lt $MaximumUptimeMinutes) {
+
+        Write-Log (
+            "Threshold not reached. Current uptime: $UptimeMinutes minutes."
+        )
+
+        exit 0
+    }
+
+
+    # ========================================================
+    # RESTART REQUIRED
+    # ========================================================
+
+    Write-Log (
+        "Threshold reached. Current uptime: $UptimeMinutes minutes. " +
+        'Returning restart-required status to Configuration Manager.'
+    ) 'WARNING'
+
+
+    # Let SCCM manage notification/countdown/restart.
+    exit 3010
+
+}
+catch {
+
+    $ErrorMessage = $_.Exception.Message
+
+    Write-Log `
+        "Uptime evaluation failed: $ErrorMessage" `
+        'ERROR'
+
+    exit 1
+}
