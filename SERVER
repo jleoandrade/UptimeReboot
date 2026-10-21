@@ -1,0 +1,5 @@
+# Decode the schedule the client received (official cmdlet)
+Convert-CMSchedule -ScheduleString '0002200000100018' | Select-Object DaySpan, HourSpan, MinuteSpan, StartTime
+
+# What the lab custom client setting has for Software Deployment (adjust the name)
+Get-CMClientSetting -Name 'Lab-Uptime - Uptime Reboot' -Setting SoftwareDeployment | Format-List
