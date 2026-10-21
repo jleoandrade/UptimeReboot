@@ -1,0 +1,13 @@
+# Maintenance windows known by the client (empty = none)
+'===== Maintenance windows'
+Get-CimInstance -Namespace root\ccm\ClientSDK -ClassName CCM_ServiceWindow -ErrorAction SilentlyContinue |
+    Select-Object Type, StartTime, EndTime, Duration | Format-Table -AutoSize | Out-String
+
+# How the client scheduled this restart
+'===== RebootCoordinator.log (last 20 lines)'
+Get-Content -Path 'C:\Windows\CCM\Logs\RebootCoordinator.log' -Tail 20 |
+    ForEach-Object { $_ -replace '^<!\[LOG\[' -replace '\]LOG\]!><time="([0-9:]+)\.\d+[^"]*" date="([^"]+)".*$', '  [$2 $1]' }
+
+Get-CMApplicationDeployment -Name 'Lab - Uptime Maximum 1h' |
+    Select-Object CollectionName, OfferTypeID, StartTime, EnforcementDeadline, OverrideServiceWindows, RebootOutsideOfServiceWindows |
+    Format-List
