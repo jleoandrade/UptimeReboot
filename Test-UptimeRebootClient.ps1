@@ -176,7 +176,7 @@ try {
             $entries = @(
                 Get-LogEntry -Path $SolutionLog -Pattern '.'
                 Get-LogEntry -Path (Join-Path $LogRoot 'AppEnforce*.lo*') -Pattern 'Matched exit code 17010|terminated with exitcode: 170'
-                Get-LogEntry -Path (Join-Path $LogRoot 'RebootCoordinator*.lo*') -Pattern 'mandatory reboot|(CITaskMgr|DCMAgent).*Rebootby'
+                Get-LogEntry -Path (Join-Path $LogRoot 'RebootCoordinator*.lo*') -Pattern 'mandatory reboot|Scheduled reboot from agent|(CITaskMgr|DCMAgent).*Rebootby|Notified UI grace period|Reboot initiated'
                 Get-LogEntry -Path (Join-Path $LogRoot 'Scheduler*.lo*') -Pattern '000000000121.*will fire at'
             ) | Where-Object { $_.Time -ge $since } | Sort-Object Time
 
@@ -220,9 +220,23 @@ try {
         $matched = Get-LogEntry -Path (Join-Path $LogRoot 'AppEnforce*.lo*') -Pattern 'Matched exit code 17010' | Where-Object { $_.Time -lt $lastBoot } | Sort-Object Time | Select-Object -Last 1
         Add-Result '17010 = PendingSoftReboot' ([bool]($matched -and $matched.Text -match 'PendingSoftReboot')) ($(if ($matched) { '{0:yyyy-MM-dd HH:mm:ss} {1}' -f $matched.Time, $matched.Text } else { 'not found' }))
 
-        # 4. Mandatory restart scheduled
-        $scheduled = Get-LogEntry -Path (Join-Path $LogRoot 'RebootCoordinator*.lo*') -Pattern 'Scheduled (non )?mandatory reboot' | Where-Object { $_.Time -lt $lastBoot } | Sort-Object Time | Select-Object -Last 1
-        Add-Result 'Mandatory restart scheduled' ([bool]($scheduled -and $scheduled.Text -notmatch 'non mandatory')) ($(if ($scheduled) { '{0:yyyy-MM-dd HH:mm:ss} {1}' -f $scheduled.Time, $scheduled.Text } else { 'not found' }))
+        # 4. Mandatory restart scheduled: a restart request with a deadline (Rebootby > 0) after the 17010.
+        #    CITaskMgr first logs a "non mandatory" request; the deployment (DCMAgent) then adds the deadline.
+        $windowStart = if ($matched) { $matched.Time.AddMinutes(-1) } else { $lastBoot.AddDays(-1) }
+        $requests = @(Get-LogEntry -Path (Join-Path $LogRoot 'RebootCoordinator*.lo*') -Pattern 'Rebootby = \d+' |
+            Where-Object { $_.Time -ge $windowStart -and $_.Time -lt $lastBoot } | Sort-Object Time)
+        $mandatory = $requests | Where-Object { $_.Text -match 'Rebootby = [1-9]' } | Select-Object -Last 1
+        Add-Result 'Mandatory restart scheduled' ([bool]$mandatory) ($(if ($mandatory) { '{0:yyyy-MM-dd HH:mm:ss} restart deadline {1}' -f $mandatory.Time, (Get-RebootDeadline $mandatory.Text) } elseif ($requests) { 'only requests with Rebootby = 0 (non-mandatory)' } else { 'no restart request found' }))
+
+        # 4b. Grace period shown to the user (informational)
+        $grace = Get-LogEntry -Path (Join-Path $LogRoot 'RebootCoordinator*.lo*') -Pattern 'Notified UI grace period' |
+            Where-Object { $_.Time -ge $windowStart -and $_.Time -lt $lastBoot } | Sort-Object Time | Select-Object -Last 1
+        $results.Add([pscustomobject]@{ Check = 'Grace period sent to the user'; Result = 'INFO'; Evidence = $(if ($grace) { '{0:yyyy-MM-dd HH:mm:ss} {1}' -f $grace.Time, $grace.Text } else { 'not found' }) })
+
+        # 4c. Did the user click Restart in Software Center? (informational; explains a short warning time)
+        $userRestart = Get-LogEntry -Path (Join-Path $LogRoot 'SCNotify*.lo*') -Pattern 'chose to restart|ButtonRestart|Initiating restart' |
+            Where-Object { $_.Time -ge $windowStart -and $_.Time -lt $lastBoot } | Sort-Object Time | Select-Object -Last 1
+        $results.Add([pscustomobject]@{ Check = 'User clicked Restart'; Result = 'INFO'; Evidence = $(if ($userRestart) { '{0:yyyy-MM-dd HH:mm:ss} {1}' -f $userRestart.Time, $userRestart.Text } else { 'no evidence in SCNotify*.log' }) })
 
         # 5. Restart initiated by the SCCM client
         $restart = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 1074; StartTime = $lastBoot.AddDays(-1) } -ErrorAction SilentlyContinue |
