@@ -1,0 +1,13 @@
+$since = (Get-Date).AddHours(-4)
+
+'===== Who restarted (System 1074: expected CcmExec.exe)'
+Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 1074; StartTime = $since } -ErrorAction SilentlyContinue |
+    ForEach-Object { '[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f $_.TimeCreated, ($_.Message -split "`r?`n")[0] }
+
+'===== User sessions before the restart (21 logon, 23 logoff, 24 disconnected, 25 reconnected)'
+Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id = 21, 23, 24, 25; StartTime = $since } -ErrorAction SilentlyContinue |
+    Sort-Object TimeCreated | ForEach-Object { '[{0:yyyy-MM-dd HH:mm:ss}] Event {1}: {2}' -f $_.TimeCreated, $_.Id, (($_.Message -split "`r?`n") -match 'User:|Source Network Address:' -join ' ') }
+
+'===== Restart scheduling (RebootCoordinator)'
+Select-String -Path 'C:\Windows\CCM\Logs\RebootCoordinator*.lo*' -Pattern 'mandatory|Rebootby|logged|session' |
+    Select-Object -Last 10 | ForEach-Object { $_.Line -replace '^<!\[LOG\[' -replace '\]LOG\]!><time="([0-9:]+)\.\d+[^"]*" date="([^"]+)".*$', '  [$2 $1]' }
