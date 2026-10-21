@@ -1,0 +1,3 @@
+# Next automatic Application Deployment Evaluation Cycle (schedule 121) according to the client scheduler
+Select-String -Path 'C:\Windows\CCM\Logs\Scheduler*.lo*' -Pattern '000000000121' |
+    Select-Object -Last 3 | ForEach-Object { $_.Line -replace '^<!\[LOG\[' -replace '\]LOG\]!>.*$' }
