@@ -1,0 +1,9 @@
+# Last restart scheduled by the SCCM client and its deadline (Rebootby is Unix time UTC)
+Select-String -Path 'C:\Windows\CCM\Logs\RebootCoordinator.log' -Pattern 'Uptime Maximum|7714dcca|420e5df1' -SimpleMatch:$false |
+    Select-Object -Last 1 | ForEach-Object {
+        if ($_.Line -match 'Rebootby = (\d+)') {
+            $rebootBy = [int64]$Matches[1]
+            if ($rebootBy -gt 0) { 'Restart deadline (local time): {0:yyyy-MM-dd HH:mm:ss}' -f [DateTimeOffset]::FromUnixTimeSeconds($rebootBy).LocalDateTime }
+            else { 'Rebootby = 0: NON-mandatory restart (no deadline)' }
+        }
+    }
