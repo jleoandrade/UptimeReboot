@@ -1,0 +1,2 @@
+Get-CimInstance -Namespace root\ccm\Policy\Machine\ActualConfig -ClassName CCM_RebootSettings |
+    Select-Object * -ExcludeProperty Cim*, PS* | Format-List
