@@ -1,0 +1,19 @@
+function Format-LogLine([string]$Line) {
+    if ($Line -match '^<!\[LOG\[(.*)\]LOG\]!><time="([0-9:]+)\.\d+[^"]*" date="([^"]+)"') { "[$($Matches[3]) $($Matches[2])] $($Matches[1])" } else { $Line }
+}
+$logs = 'C:\Windows\CCM\Logs'
+
+'===== Reboot scheduling (expected: "Scheduled mandatory reboot", Rebootby <> 0)'
+Select-String -Path "$logs\RebootCoordinator*.lo*" -Pattern 'mandatory reboot|Rebootby' |
+    Select-Object -Last 4 | ForEach-Object { Format-LogLine $_.Line }
+
+'===== 17010 classification (expected: PendingSoftReboot)'
+Select-String -Path "$logs\AppEnforce*.lo*" -Pattern 'Matched exit code 17010' |
+    Select-Object -Last 2 | ForEach-Object { Format-LogLine $_.Line }
+
+'===== Restarts in the last 3 hours (expected: CcmExec.exe)'
+Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 1074; StartTime = (Get-Date).AddHours(-3) } |
+    ForEach-Object { '[{0:yyyy-MM-dd HH:mm:ss}] {1}' -f $_.TimeCreated, ($_.Message -split "`r?`n")[0] }
+
+'===== Solution log (expected after boot: Result: DETECTED)'
+Get-Content -Path 'C:\ProgramData\Corporate\UptimeReboot\UptimeReboot.log' -Tail 4 | ForEach-Object { Format-LogLine $_ }
