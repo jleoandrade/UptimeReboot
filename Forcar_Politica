@@ -1,0 +1,6 @@
+Set-CMApplicationDeployment -ApplicationName 'Lab - Uptime Maximum 1h' -CollectionName 'LAB-Uptime' `
+    -OverrideServiceWindow $true -RebootOutsideServiceWindow $true
+
+# Verify: both must be True
+Get-CMApplicationDeployment -Name 'Lab - Uptime Maximum 1h' |
+    Select-Object CollectionName, OverrideServiceWindows, RebootOutsideOfServiceWindows | Format-List
