@@ -107,6 +107,8 @@ function Get-EvaluationSchedule {
 
     $nextFire = $null
     $fireEntry = Get-LogEntry -Path (Join-Path $LogRoot 'Scheduler*.lo*') -Pattern '000000000121.*will fire at' | Sort-Object Time | Select-Object -Last 1
+    # Fallback: the token is also in the Scheduler.log line when the policy class cannot be read
+    if (-not $token -and $fireEntry -and $fireEntry.Text -match "SMSTrigger '([0-9A-Fa-f]{16})'") { $token = $Matches[1] }
     if ($fireEntry -and $fireEntry.Text -match 'will fire at (.+?) with') {
         $parsed = [datetime]::MinValue
         if ([datetime]::TryParseExact($Matches[1], @('M/d/yyyy h:mm:ss tt', 'M/d/yyyy H:mm:ss'), $Culture, 'None', [ref]$parsed)) { $nextFire = $parsed }
@@ -244,10 +246,13 @@ try {
         $restartText = if ($restart) { ($restart.Message -split "`r?`n")[0] } else { '' }
         Add-Result 'Restart by CcmExec.exe' ($restartText -match 'CcmExec') ($(if ($restart) { '{0:yyyy-MM-dd HH:mm:ss} {1}' -f $restart.TimeCreated, $restartText } else { 'event 1074 not found' }))
 
-        # 6. Warning time between 17010 and the restart (expected about 10 minutes)
-        if ($matched -and $restart) {
-            $warningMinutes = [math]::Round(($restart.TimeCreated - $matched.Time).TotalMinutes, 1)
-            Add-Result 'Warning time about 10 min' ($warningMinutes -ge 9 -and $warningMinutes -le 12) ("$warningMinutes min between 17010 and the restart")
+        # 6. Warning time between 17010 and the new boot (expected: 10 min of warning + shutdown/boot time).
+        #    Event 1074 is NOT the restart moment: the client logs it when the final countdown starts and hands
+        #    the restart to Windows with a timeout (the "You're about to be signed out" message).
+        if ($matched) {
+            $warningMinutes = [math]::Round(($lastBoot - $matched.Time).TotalMinutes, 1)
+            $initiated = if ($restart) { [math]::Round(($restart.TimeCreated - $matched.Time).TotalMinutes, 1) } else { 'n/a' }
+            Add-Result 'Warning time about 10 min' ($warningMinutes -ge 9.5 -and $warningMinutes -le 16) ("$warningMinutes min between 17010 and the new boot (final countdown started after $initiated min)")
         }
 
         # 7. No loop: first detection after the boot is DETECTED
