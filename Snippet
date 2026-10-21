@@ -1,0 +1,15 @@
+function Format-LogLine([string]$Line) {
+    if ($Line -match '^<!\[LOG\[(.*)\]LOG\]!><time="([0-9:]+)\.\d+[^"]*" date="([^"]+)"') { "[$($Matches[3]) $($Matches[2])] $($Matches[1])" } else { $Line }
+}
+
+'===== RebootCoordinator 15:39 - 15:43'
+Select-String -Path 'C:\Windows\CCM\Logs\RebootCoordinator*.lo*' -Pattern 'time="15:(39|4[0-3]):[^"]*" date="10-21-2026"' |
+    ForEach-Object { Format-LogLine $_.Line }
+
+'===== User sessions 15:00 - 15:45 (21 logon, 23 logoff, 24 disconnected, 25 reconnected)'
+Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id = 21, 23, 24, 25; StartTime = [datetime]'2026-10-21 15:00'; EndTime = [datetime]'2026-10-21 15:45' } -ErrorAction SilentlyContinue |
+    Sort-Object TimeCreated | ForEach-Object { '[{0:HH:mm:ss}] Event {1}: {2}' -f $_.TimeCreated, $_.Id, (($_.Message -split "`r?`n") -match 'User:' -join ' ') }
+
+'===== Maintenance windows known by the client'
+Get-CimInstance -Namespace root\ccm\ClientSDK -ClassName CCM_ServiceWindow -ErrorAction SilentlyContinue |
+    Select-Object Type, StartTime, EndTime, Duration | Format-Table -AutoSize
