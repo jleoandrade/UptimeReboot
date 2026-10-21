@@ -1,9 +1,20 @@
-# Last restart scheduled by the SCCM client and its deadline (Rebootby is Unix time UTC)
-Select-String -Path 'C:\Windows\CCM\Logs\RebootCoordinator.log' -Pattern 'Uptime Maximum|7714dcca|420e5df1' -SimpleMatch:$false |
-    Select-Object -Last 1 | ForEach-Object {
-        if ($_.Line -match 'Rebootby = (\d+)') {
-            $rebootBy = [int64]$Matches[1]
-            if ($rebootBy -gt 0) { 'Restart deadline (local time): {0:yyyy-MM-dd HH:mm:ss}' -f [DateTimeOffset]::FromUnixTimeSeconds($rebootBy).LocalDateTime }
-            else { 'Rebootby = 0: NON-mandatory restart (no deadline)' }
-        }
-    }
+function Format-LogLine([string]$Line) {
+    if ($Line -match '^<!\[LOG\[(.*)\]LOG\]!><time="([0-9:]+)\.\d+[^"]*" date="([^"]+)"') { "[$($Matches[3]) $($Matches[2])] $($Matches[1])" } else { $Line }
+}
+$evaluationCycle = '{00000000-0000-0000-0000-000000000121}'
+
+$os = Get-CimInstance -ClassName Win32_OperatingSystem
+'Now: {0:yyyy-MM-dd HH:mm:ss} | Last boot: {1:yyyy-MM-dd HH:mm:ss} | Uptime: {2:N0} min' -f $os.LocalDateTime, $os.LastBootUpTime, ($os.LocalDateTime - $os.LastBootUpTime).TotalMinutes
+
+'===== Re-evaluation schedule the client received (expected: SimpleInterval;Minutes=60)'
+Get-CimInstance -Namespace root\ccm\Policy\Machine\ActualConfig -ClassName CCM_Scheduler_ScheduledMessage -ErrorAction SilentlyContinue |
+    Where-Object { $_.ScheduledMessageID -eq $evaluationCycle } |
+    ForEach-Object { 'Triggers: ' + ($_.Triggers -join ' | ') }
+
+'===== Last automatic run of the Application Deployment Evaluation Cycle'
+Get-CimInstance -Namespace root\ccm\scheduler -ClassName CCM_Scheduler_History -ErrorAction SilentlyContinue |
+    Where-Object { $_.ScheduleID -eq $evaluationCycle } |
+    Select-Object UserSID, FirstEvalTime, LastTriggerTime | Format-List | Out-String
+
+'===== Last detections (UptimeReboot.log)'
+Get-Content -Path 'C:\ProgramData\Corporate\UptimeReboot\UptimeReboot.log' -Tail 4 | ForEach-Object { Format-LogLine $_ }
