@@ -249,10 +249,34 @@ try {
         # 6. Warning time between 17010 and the new boot (expected: 10 min of warning + shutdown/boot time).
         #    Event 1074 is NOT the restart moment: the client logs it when the final countdown starts and hands
         #    the restart to Windows with a timeout (the "You're about to be signed out" message).
+        #    Without an active user session the client restarts right away (nobody to warn): then this check is INFO.
         if ($matched) {
+            # User session state at the restart deadline (21 logon, 22 shell start, 23 logoff, 24 disconnected, 25 reconnected)
+            $sessionState = 'unknown'
+            $sessionEvidence = 'boot time before the 17010 not found in the install log line'
+            if ($install -and $install.Text -match 'last boot (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+                $previousBoot = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $Culture)
+                $checkpoint = if ($mandatory) { $mandatory.Time } else { $matched.Time }
+                $lastSession = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id = 21, 22, 23, 24, 25; StartTime = $previousBoot; EndTime = $checkpoint } -ErrorAction SilentlyContinue |
+                    Sort-Object TimeCreated | Select-Object -Last 1
+                if (-not $lastSession) { $sessionState = 'none'; $sessionEvidence = 'no user logon between the previous boot and the deadline' }
+                else {
+                    $sessionState = if ($lastSession.Id -in 21, 22, 25) { 'active' } else { 'not active' }
+                    $sessionUser = (($lastSession.Message -split "`r?`n") -match 'User:') -join ' '
+                    $sessionEvidence = '{0:yyyy-MM-dd HH:mm:ss} event {1} {2}' -f $lastSession.TimeCreated, $lastSession.Id, $sessionUser.Trim()
+                }
+            }
+            $results.Add([pscustomobject]@{ Check = 'User session at the deadline'; Result = 'INFO'; Evidence = "$sessionState - $sessionEvidence" })
+
             $warningMinutes = [math]::Round(($lastBoot - $matched.Time).TotalMinutes, 1)
             $initiated = if ($restart) { [math]::Round(($restart.TimeCreated - $matched.Time).TotalMinutes, 1) } else { 'n/a' }
-            Add-Result 'Warning time about 10 min' ($warningMinutes -ge 9.5 -and $warningMinutes -le 16) ("$warningMinutes min between 17010 and the new boot (final countdown started after $initiated min)")
+            $warningText = "$warningMinutes min between 17010 and the new boot (final countdown started after $initiated min)"
+            if ($sessionState -eq 'none' -or $sessionState -eq 'not active') {
+                $results.Add([pscustomobject]@{ Check = 'Warning time about 10 min'; Result = 'INFO'; Evidence = "$warningText. No active user session: immediate restart is the expected behavior." })
+            }
+            else {
+                Add-Result 'Warning time about 10 min' ($warningMinutes -ge 9.5 -and $warningMinutes -le 16) $warningText
+            }
         }
 
         # 7. No loop: first detection after the boot is DETECTED
